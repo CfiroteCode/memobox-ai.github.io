@@ -1233,4 +1233,638 @@ export default function App() {
                     <label style={{ fontSize: "0.88rem" }}>
                       Rythme :{" "}
                       <select
-                        style={{ width: "auto", padding: "6px 10px"
+                        style={{ width: "auto", padding: "6px 10px" }}
+                        value={deck.mode}
+                        onChange={(e) =>
+                          setData((prev) => ({
+                            ...prev,
+                            decks: prev.decks.map((d) =>
+                              d.id === deck.id ? { ...d, mode: e.target.value } : d
+                            ),
+                          }))
+                        }
+                      >
+                        <option value="longTerm">Zones (long terme)</option>
+                        <option value="sprint">Sprint (rattrapage)</option>
+                      </select>
+                    </label>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button className="mb-btn" onClick={() => prepareEnrichDeck(deck)}>
+                        + Étoffer
+                      </button>
+                      <button className="mb-btn" onClick={() => startRenameDeck(deck)}>
+                        Renommer
+                      </button>
+                      <button className="mb-btn mb-btn-danger" onClick={() => deleteDeck(deck.id)}>
+                        Supprimer
+                      </button>
+                      <button className="mb-btn mb-btn-primary" onClick={() => startSession([deck.id])}>
+                        Réviser ce lot
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
+        {tab === "study" && (
+          <section>
+            {!currentItem ? (
+              <div className="mb-panel">
+                <h2 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
+                  Session terminée ou non démarrée
+                </h2>
+                <p style={{ color: "var(--ink-muted)" }}>
+                  Aucune carte en attente dans cette file. Choisis un lot pour lancer une session.
+                </p>
+                <button className="mb-btn mb-btn-primary" onClick={() => setTab("decks")}>
+                  Retour aux lots
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span className="mb-pill">Zone {currentZoneNum}</span>
+                    <span className="mb-pill">
+                      {activeDir === "frontToBack" ? "A → B (Recto → Verso)" : "B → A (Verso → Recto)"}
+                    </span>
+                    <span className="mb-pill">Restantes : {session.queue.length}</span>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="mb-btn"
+                      onClick={() => (editingCard ? setEditingCard(false) : openCardEditor())}
+                    >
+                      {editingCard ? "Fermer l'édition" : "Modifier la carte"}
+                    </button>
+                    <button className="mb-btn" onClick={() => setSession(null)}>
+                      Quitter
+                    </button>
+                  </div>
+                </div>
+
+                {editingCard && (
+                  <form className="mb-panel" style={{ marginTop: 12 }} onSubmit={saveCardManualEdit}>
+                    <h3 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
+                      Mise à jour manuelle de la carte
+                    </h3>
+
+                    <label className="mb-field-label">
+                      Recto (A)
+                      <input
+                        type="text"
+                        value={draftFront}
+                        onChange={(e) => setDraftFront(e.target.value)}
+                      />
+                    </label>
+
+                    <label className="mb-field-label">
+                      Verso (B)
+                      <input
+                        type="text"
+                        value={draftBack}
+                        onChange={(e) => setDraftBack(e.target.value)}
+                      />
+                    </label>
+
+                    <label className="mb-field-label">
+                      Indice (sans révéler la réponse)
+                      <input
+                        type="text"
+                        value={draftHint}
+                        onChange={(e) => setDraftHint(e.target.value)}
+                      />
+                    </label>
+
+                    {currentItem.card.isLanguage && (
+                      <label className="mb-field-label">
+                        Repère de ton / prononciation
+                        <input
+                          type="text"
+                          value={draftToneHint}
+                          onChange={(e) => setDraftToneHint(e.target.value)}
+                        />
+                      </label>
+                    )}
+
+                    <label className="mb-field-label">
+                      Exemple
+                      <input
+                        type="text"
+                        value={draftExample}
+                        onChange={(e) => setDraftExample(e.target.value)}
+                      />
+                    </label>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                        gap: 10,
+                        marginTop: 12,
+                      }}
+                    >
+                      <label className="mb-field-label" style={{ margin: 0 }}>
+                        Zone A → B
+                        <select
+                          value={draftF2bZone}
+                          onChange={(e) => setDraftF2bZone(Number(e.target.value))}
+                        >
+                          {[0, 1, 2, 3, 4].map((z) => (
+                            <option key={z} value={z}>
+                              Zone {z}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="mb-field-label" style={{ margin: 0 }}>
+                        Zone B → A
+                        <select
+                          value={draftB2fZone}
+                          onChange={(e) => setDraftB2fZone(Number(e.target.value))}
+                        >
+                          {[0, 1, 2, 3, 4].map((z) => (
+                            <option key={z} value={z}>
+                              Zone {z}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="mb-field-label" style={{ margin: 0 }}>
+                        Prochain sens
+                        <select
+                          value={draftNextDir}
+                          onChange={(e) => setDraftNextDir(e.target.value)}
+                        >
+                          <option value="frontToBack">A → B</option>
+                          <option value="backToFront">B → A</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                      <button type="submit" className="mb-btn mb-btn-primary">
+                        Enregistrer les modifications
+                      </button>
+                      <button
+                        type="button"
+                        className="mb-btn"
+                        onClick={() => setEditingCard(false)}
+                      >
+                        Annuler
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="mb-flip-scene">
+                  <div className={`mb-flip-card ${flipped ? "is-flipped" : ""}`}>
+                    {/* RECTO */}
+                    <div className="mb-face">
+                      <div>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            flexWrap: "wrap",
+                            gap: 8,
+                            alignItems: "center",
+                          }}
+                        >
+                          <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                            {currentItem.deck.title}
+                          </small>
+
+                          {askIsLanguage && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                              <button
+                                className="mb-btn"
+                                onClick={() => speakText(askSide.text, askSide.lang)}
+                              >
+                                Écouter ({askSide.lang})
+                              </button>
+                              <button
+                                className="mb-btn"
+                                onClick={() => handleSpeechTest(askSide.lang)}
+                              >
+                                Tester voix
+                              </button>
+                              <label style={{ fontSize: "0.82rem", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={strictAccents}
+                                  onChange={(e) => setStrictAccents(e.target.checked)}
+                                />{" "}
+                                Strict
+                              </label>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mb-word">
+                          {listenMode &&
+                          askIsLanguage &&
+                          activeDir === "frontToBack" &&
+                          !flipped ? (
+                            <span style={{ fontSize: "1.2rem", fontStyle: "italic", color: "var(--ink-muted)" }}>
+                              Mode écoute actif (A → B) — clique sur « Écouter » ou retourne la carte.
+                            </span>
+                          ) : (
+                            askSide.text
+                          )}
+                        </div>
+
+                        {speechStatus && askIsLanguage && (
+                          <div className="mb-note-box">
+                            <strong>{speechStatus}</strong>
+                            {spokenText && (
+                              <div style={{ marginTop: 4 }}>
+                                Entendu : <code>{spokenText}</code> · Attendu :{" "}
+                                <code>{askSide.text}</code> ·{" "}
+                                <strong>
+                                  {speechMatches ? "Correspondance OK" : "À vérifier"}
+                                </strong>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {showHint && (
+                          <div className="mb-note-box">
+                            <div>
+                              <strong>Indice :</strong>{" "}
+                              {currentItem.card.hint ||
+                                "Aucun indice enregistré pour cette carte."}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          flexWrap: "wrap",
+                          gap: 10,
+                          marginTop: 14,
+                        }}
+                      >
+                        <button
+                          className="mb-btn"
+                          onClick={() => {
+                            setShowHint((v) => !v);
+                            setHintUsed(true);
+                          }}
+                        >
+                          {showHint ? "Masquer l'indice" : "Afficher l'indice"}
+                        </button>
+
+                        <button
+                          className="mb-btn mb-btn-primary"
+                          onClick={() => setFlipped(true)}
+                        >
+                          Retourner la carte
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* VERSO */}
+                    <div className="mb-face mb-face-back">
+                      <div>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                            Réponse · Zone {currentZoneNum} →{" "}
+                            {hintUsed
+                              ? `Zone ${currentZoneNum} (avec indice)`
+                              : `Zone ${Math.min(MAX_ZONE, currentZoneNum + 1)} si Facile`}
+                          </small>
+
+                          {ansIsLanguage && (
+                            <button
+                              className="mb-btn"
+                              onClick={() => speakText(ansSide.text, ansSide.lang)}
+                            >
+                              Écouter réponse
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="mb-answer-word" style={{ marginTop: 12 }}>
+                          {ansSide.text}
+                        </div>
+
+                        {currentItem.card.toneHint && (
+                          <div className="mb-note-box">
+                            <strong>Ton / Prononciation :</strong> {currentItem.card.toneHint}
+                          </div>
+                        )}
+
+                        {currentItem.card.example && (
+                          <p style={{ margin: "10px 0 0", color: "var(--ink-muted)", fontSize: "0.92rem" }}>
+                            <strong>Exemple :</strong> {currentItem.card.example}
+                          </p>
+                        )}
+                      </div>
+
+                      <div style={{ marginTop: 16 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: 8,
+                            marginBottom: 8,
+                          }}
+                        >
+                          <small style={{ color: "var(--ink-muted)" }}>
+                            {hintUsed
+                              ? "Indice consulté : « Facile » est désactivé pour ce tour."
+                              : "Évalue ton rappel pour mettre à jour la zone :"}
+                          </small>
+                          <button className="mb-btn" onClick={() => setFlipped(false)}>
+                            Voir le recto
+                          </button>
+                        </div>
+
+                        <div className="mb-rate-grid">
+                          <button
+                            className="mb-btn mb-rate-bad"
+                            onClick={() => rateCard("bad")}
+                          >
+                            Ne sais pas (→ Zone 0)
+                          </button>
+                          <button
+                            className="mb-btn mb-rate-mid"
+                            onClick={() => rateCard("mid")}
+                          >
+                            Avec indice (Reste Zone {currentZoneNum})
+                          </button>
+                          <button
+                            className="mb-btn mb-rate-easy"
+                            disabled={hintUsed}
+                            onClick={() => rateCard("easy")}
+                          >
+                            Facile (→ Zone {Math.min(MAX_ZONE, currentZoneNum + 1)})
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {tab === "import" && (
+          <section className="mb-panel">
+            <h2 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
+              1. Générer le prompt JSON pour l'IA
+            </h2>
+
+            <label className="mb-field-label">
+              Sujet / Ce que tu veux apprendre ou approfondir
+              <input
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="Ex. Vietnamien du Nord — leçon 4 : famille et repas"
+              />
+            </label>
+
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 12,
+                background: "var(--paper)",
+                border: "1px solid var(--line)",
+              }}
+            >
+              <label style={{ fontWeight: 600, fontSize: "0.9rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={attachPdf}
+                  onChange={(e) => setAttachPdf(e.target.checked)}
+                />{" "}
+                Joindre un PDF à la conversation avec l'IA (ajoute un rappel dans le prompt)
+              </label>
+
+              {attachPdf && (
+                <div style={{ marginTop: 10 }}>
+                  <label className="mb-btn" style={{ cursor: "pointer" }}>
+                    {pdfName ? `PDF sélectionné : ${pdfName}` : "Choisir le fichier PDF de référence"}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      style={{ display: "none" }}
+                      onChange={(e) => setPdfName(e.target.files?.[0]?.name || "")}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <label className="mb-field-label" style={{ marginTop: 10 }}>
+                Contexte ou précisions supplémentaires (optionnel)
+                <input
+                  type="text"
+                  value={extraContext}
+                  onChange={(e) => setExtraContext(e.target.value)}
+                  placeholder="Ex. Ajoute des phrases courantes à l'oral à Hanoï, paires minimales..."
+                />
+              </label>
+            </div>
+
+            <div
+              style={{
+                marginTop: 14,
+                padding: 12,
+                borderRadius: 12,
+                background: "var(--paper)",
+                border: "1px solid var(--line)",
+              }}
+            >
+              <label style={{ fontWeight: 700, fontSize: "0.92rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={isLanguageMode}
+                  onChange={(e) => setIsLanguageMode(e.target.checked)}
+                />{" "}
+                Mode apprentissage de langue (active voix, micro et repères de tons sur les cartes)
+              </label>
+
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 12,
+                  alignItems: "center",
+                  marginTop: 10,
+                }}
+              >
+                <label style={{ fontSize: "0.88rem" }}>
+                  Nombre de cartes :{" "}
+                  <select
+                    style={{ width: "auto", padding: "6px 10px" }}
+                    value={cardCount}
+                    onChange={(e) => setCardCount(Number(e.target.value))}
+                  >
+                    <option value={10}>10</option>
+                    <option value={15}>15</option>
+                    <option value={20}>20</option>
+                    <option value={30}>30</option>
+                    <option value={50}>50</option>
+                    <option value={80}>80</option>
+                  </select>
+                </label>
+
+                {isLanguageMode && (
+                  <>
+                    <label style={{ fontSize: "0.88rem" }}>
+                      Code langue :{" "}
+                      <input
+                        type="text"
+                        value={targetLang}
+                        onChange={(e) => setTargetLang(e.target.value)}
+                        style={{ width: 92, padding: "6px 8px" }}
+                      />
+                    </label>
+
+                    <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={northVietnamese}
+                        onChange={(e) => setNorthVietnamese(e.target.checked)}
+                      />{" "}
+                      Vietnamien du Nord
+                    </label>
+
+                    <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={includeToneHint}
+                        onChange={(e) => setIncludeToneHint(e.target.checked)}
+                      />{" "}
+                      Repères de ton
+                    </label>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="mb-btn mb-btn-accent" onClick={handleCopyPrompt}>
+                Générer et copier le prompt JSON
+              </button>
+              {generatedPrompt && (
+                <button
+                  className="mb-btn"
+                  onClick={() => setGeneratedPrompt("")}
+                >
+                  Masquer le prompt
+                </button>
+              )}
+            </div>
+
+            {promptFeedback && (
+              <p style={{ color: "var(--accent)", fontWeight: 600, marginTop: 8 }}>
+                {promptFeedback}
+              </p>
+            )}
+
+            {generatedPrompt && (
+              <pre className="mb-code-block" aria-label="Prompt JSON généré">
+                <code>{generatedPrompt}</code>
+              </pre>
+            )}
+
+            <hr style={{ border: "none", borderTop: "1px solid var(--line)", margin: "22px 0" }} />
+
+            <h2 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
+              2. Importer les flashcards (JSON)
+            </h2>
+
+            <label className="mb-field-label">
+              Destination de l'import
+              <select
+                value={targetDeckId}
+                onChange={(e) => setTargetDeckId(e.target.value)}
+              >
+                <option value="__NEW__">Créer un nouveau lot</option>
+                {data.decks.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    Étoffer le lot existant : {d.title} ({d.cards.length} cartes)
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {!selectedTargetDeck && (
+              <label className="mb-field-label">
+                Titre du nouveau lot
+                <input
+                  type="text"
+                  value={importTitle}
+                  onChange={(e) => setImportTitle(e.target.value)}
+                  placeholder="Ex. Vietnamien du Nord — Cours complet"
+                />
+              </label>
+            )}
+
+            <label className="mb-field-label">
+              JSON retourné par l'IA
+              <textarea
+                rows={7}
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                placeholder="Colle ici le bloc ```json ... ``` ou le tableau JSON généré par l'IA..."
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+              <button className="mb-btn" onClick={handlePreview}>
+                Prévisualiser
+              </button>
+              <button
+                className="mb-btn mb-btn-primary"
+                disabled={!previewCards}
+                onClick={handleConfirmImport}
+              >
+                {selectedTargetDeck
+                  ? `Ajouter au lot « ${selectedTargetDeck.title} »` : "Créer le lot"} </button> </div>  {importError && ( <p style={{ color: "var(--bad)", fontWeight: 600, marginTop: 10 }}> {importError} </p> )}  {previewCards && ( <div className="mb-note-box" style={{ borderLeftColor: "var(--ok)" }}> <strong>{previewCards.length} carte(s) prête(s)</strong> · Destination :{" "} <strong> {selectedTargetDeck ? `Lot « ${selectedTargetDeck.title} »`
+                    : "Nouveau lot"}
+                </strong>{" "}
+                · Exemple : <em>{previewCards[0].front.text}</em> →{" "}
+                <em>{previewCards[0].back.text}</em>
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
