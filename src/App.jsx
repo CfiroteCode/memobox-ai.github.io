@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-const STORAGE_KEY = "memobox_ai_v1_1";
+const STORAGE_KEY = "memobox_ai_v3";
 const DAY_MS = 86400000;
 
 const ZONE_CONFIG = {
@@ -14,6 +14,15 @@ const MAX_ZONE = 4;
 
 function uid() {
   return "id_" + Math.random().toString(36).slice(2, 10);
+}
+
+function shuffleArray(list) {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 function normalizeText(str, strictAccents = true) {
@@ -74,7 +83,7 @@ function getDefaultData() {
               front: "má",
               back: "maman (Nord) / joue",
               toneHint: "Thanh sắc — aigu montant (voix qui monte)",
-              hint: "Membre proche de la famille ou partie du visage, avec un ton qui monte",
+              hint: "Lien familial proche ou zone du visage, ton montant",
               example: "Má ơi, con về rồi.",
               isMinimalPair: true,
               bidirectional: true,
@@ -86,7 +95,7 @@ function getDefaultData() {
               front: "mà",
               back: "mais / qui / dont",
               toneHint: "Thanh huyền — grave descendant doux",
-              hint: "Mot-outil de liaison ou relatif, voix douce qui descend",
+              hint: "Mot de liaison ou relatif, voix grave qui descend doucement",
               example: "Cái này rẻ mà tốt.",
               isMinimalPair: true,
               bidirectional: true,
@@ -98,7 +107,7 @@ function getDefaultData() {
               front: "mả",
               back: "tombe / sépulture",
               toneHint: "Thanh hỏi — plongeant puis remontant",
-              hint: "Lieu de mémoire / cimetière, contour plongeant puis remontant",
+              hint: "Lieu de sépulture, contour qui creuse puis remonte",
               example: "Thăm mả tổ tiên.",
               isMinimalPair: true,
               bidirectional: true,
@@ -117,7 +126,7 @@ function getDefaultData() {
             {
               front: "Point de Lagrange L2",
               back: "Position d'équilibre gravitationnel derrière la Terre vue du Soleil (idéal pour les télescopes infrarouges comme JWST)",
-              hint: "Zone d'équilibre à ~1,5 million de km côté nuit",
+              hint: "Point d'équilibre à ~1,5 million de km côté nuit",
               example: "Le télescope James Webb orbite autour du point L2.",
               bidirectional: true,
             },
@@ -127,7 +136,7 @@ function getDefaultData() {
             {
               front: "Vitesse de libération terrestre",
               back: "Environ 11,2 km/s (nécessaire pour quitter l'attraction terrestre sans propulsion continue)",
-              hint: "Ordre de grandeur en km/s pour s'extraire de la gravité terrestre",
+              hint: "Ordre de grandeur en km/s pour s'affranchir de la gravité terrestre",
               example: "À 11,2 km/s, l'énergie cinétique compense le puits gravitationnel.",
               bidirectional: true,
             },
@@ -154,11 +163,12 @@ function isCardDue(card, mode) {
   return (dirState.nextReview || 0) <= now;
 }
 
-function speakText(text, lang = "vi-VN") {
+function speakText(text, lang = "vi-VN", rate = 1) {
   if (!("speechSynthesis" in window) || !text) return;
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = lang;
+  utter.rate = rate;
   const voices = window.speechSynthesis.getVoices();
   const match =
     voices.find((v) => v.lang.toLowerCase() === lang.toLowerCase()) ||
@@ -182,12 +192,15 @@ export default function App() {
 
   const [tab, setTab] = useState("decks");
   const [onlyMinimalPairs, setOnlyMinimalPairs] = useState(false);
-  const [listenMode, setListenMode] = useState(false);
+  const [listenOnlyMode, setListenOnlyMode] = useState(false);
+  const [speechRate, setSpeechRate] = useState(1);
 
+  // Gestion des lots
   const [editingDeckId, setEditingDeckId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [targetDeckId, setTargetDeckId] = useState("__NEW__");
 
+  // Session de révision / drill
   const [session, setSession] = useState(null);
   const [flipped, setFlipped] = useState(false);
   const [showHint, setShowHint] = useState(false);
@@ -196,6 +209,7 @@ export default function App() {
   const [spokenText, setSpokenText] = useState("");
   const [speechStatus, setSpeechStatus] = useState("");
 
+  // Édition manuelle d'une carte
   const [editingCard, setEditingCard] = useState(false);
   const [draftFront, setDraftFront] = useState("");
   const [draftBack, setDraftBack] = useState("");
@@ -206,6 +220,15 @@ export default function App() {
   const [draftB2fZone, setDraftB2fZone] = useState(0);
   const [draftNextDir, setDraftNextDir] = useState("frontToBack");
 
+  // Mode Jeu rapide (Prononciation / Réflexe)
+  const [gameSubMode, setGameSubMode] = useState("pronunciation");
+  const [game, setGame] = useState(null);
+  const [gameFeedback, setGameFeedback] = useState("");
+  const [gameSpoken, setGameSpoken] = useState("");
+  const [gameListening, setGameListening] = useState(false);
+  const [gameShowAnswer, setGameShowAnswer] = useState(false);
+
+  // Générateur de prompt & import
   const [topic, setTopic] = useState("");
   const [extraContext, setExtraContext] = useState("");
   const [attachPdf, setAttachPdf] = useState(false);
@@ -244,13 +267,15 @@ export default function App() {
     const deck = data.decks.find((d) => d.id === head.deckId);
     const card = deck?.cards.find((c) => c.id === head.cardId);
     if (!deck || !card) return null;
-    return { deck, card };
+    return { deck, card, forcedDir: head.forcedDir || null };
   }, [session, data.decks]);
 
+  // En mode Écoute seul : on force temporairement la face A (frontToBack)
   const activeDir = currentItem
-    ? currentItem.card.bidirectional
-      ? currentItem.card.progress.nextDirection || "frontToBack"
-      : "frontToBack"
+    ? currentItem.forcedDir ||
+      (currentItem.card.bidirectional
+        ? currentItem.card.progress.nextDirection || "frontToBack"
+        : "frontToBack")
     : "frontToBack";
 
   const askSide = currentItem
@@ -268,18 +293,175 @@ export default function App() {
   const askIsLanguage = Boolean(currentItem?.card.isLanguage && askSide?.lang !== "fr-FR");
   const ansIsLanguage = Boolean(currentItem?.card.isLanguage && ansSide?.lang !== "fr-FR");
 
+  // Lecture auto en mode Écoute seul uniquement sur la face A (frontToBack)
   useEffect(() => {
     if (
-      listenMode &&
+      session?.listenOnly &&
       currentItem &&
       tab === "study" &&
       currentItem.card.isLanguage &&
       activeDir === "frontToBack" &&
       currentItem.card.front
     ) {
-      speakText(currentItem.card.front.text, currentItem.card.front.lang);
+      speakText(currentItem.card.front.text, currentItem.card.front.lang, speechRate);
     }
-  }, [listenMode, currentItem, tab, activeDir]);
+  }, [session, currentItem, tab, activeDir, speechRate]);
+
+  function buildQueueFromDecks(deckIds, { dueOnly = true, forceFront = false } = {}) {
+    const chosenDecks = data.decks.filter((d) => deckIds.includes(d.id));
+    const items = [];
+
+    chosenDecks.forEach((deck) => {
+      deck.cards.forEach((card) => {
+        if (onlyMinimalPairs && !card.isMinimalPair) return;
+        if (forceFront && !card.isLanguage) return;
+        if (!dueOnly || isCardDue(card, deck.mode)) {
+          items.push({
+            deckId: deck.id,
+            cardId: card.id,
+            forcedDir: forceFront ? "frontToBack" : null,
+          });
+        }
+      });
+    });
+
+    return shuffleArray(items);
+  }
+
+  function startSession(deckIds, { listenOnly = false, drillOnly = false } = {}) {
+    const chosenDecks = data.decks.filter((d) => deckIds.includes(d.id));
+    const useSprint = !drillOnly && chosenDecks.some((d) => d.mode === "sprint");
+    const queue = buildQueueFromDecks(deckIds, {
+      dueOnly: !drillOnly && !listenOnly,
+      forceFront: listenOnly,
+    });
+
+    setSession({
+      deckIds,
+      mode: useSprint ? "sprint" : "longTerm",
+      listenOnly,
+      drillOnly,
+      queue,
+      allInitialQueue: [...queue],
+      missedItems: [],
+      finished: queue.length === 0,
+    });
+    setFlipped(false);
+    setShowHint(false);
+    setHintUsed(false);
+    setEditingCard(false);
+    setSpokenText("");
+    setSpeechStatus("");
+    setTab("study");
+  }
+
+  function replayCurrentSeries(onlyMissed = false) {
+    if (!session) return;
+    const base = onlyMissed
+      ? session.missedItems
+      : session.allInitialQueue?.length
+      ? session.allInitialQueue
+      : buildQueueFromDecks(session.deckIds, {
+          dueOnly: false,
+          forceFront: session.listenOnly,
+        });
+
+    const nextQueue = shuffleArray(base);
+    setSession({
+      ...session,
+      drillOnly: true,
+      queue: nextQueue,
+      missedItems: [],
+      finished: nextQueue.length === 0,
+    });
+    setFlipped(false);
+    setShowHint(false);
+    setHintUsed(false);
+    setEditingCard(false);
+    setSpokenText("");
+    setSpeechStatus("");
+  }
+
+  function rateCard(quality) {
+    if (!currentItem || !session) return;
+    const { deck, card } = currentItem;
+    const dir = activeDir;
+    const nextQueue = session.queue.slice(1);
+    const nextMissed =
+      quality === "bad"
+        ? [...(session.missedItems || []), { deckId: deck.id, cardId: card.id, forcedDir: session.listenOnly ? "frontToBack" : null }]
+        : session.missedItems || [];
+
+    let updatedCard = null;
+
+    // En drill libre ou écoute pure : pas d'impact sur les zones de répétition espacée
+    if (!session.drillOnly && !session.listenOnly) {
+      setData((prev) => ({
+        ...prev,
+        decks: prev.decks.map((d) => {
+          if (d.id !== deck.id) return d;
+          return {
+            ...d,
+            cards: d.cards.map((c) => {
+              if (c.id !== card.id) return c;
+              const p = {
+                ...c.progress,
+                frontToBack: { ...c.progress.frontToBack },
+                backToFront: { ...c.progress.backToFront },
+              };
+              const sideState = p[dir];
+
+              if (quality === "bad") {
+                sideState.zone = 0;
+                sideState.validated = false;
+                sideState.nextReview = Date.now();
+              } else if (quality === "mid") {
+                const currentZone = sideState.zone ?? 0;
+                sideState.zone = currentZone;
+                sideState.nextReview =
+                  Date.now() + (ZONE_CONFIG[currentZone]?.days || 0) * DAY_MS;
+              } else if (quality === "easy") {
+                const nextZone = Math.min(MAX_ZONE, (sideState.zone ?? 0) + 1);
+                sideState.zone = nextZone;
+                sideState.validated = true;
+                sideState.nextReview =
+                  Date.now() + (ZONE_CONFIG[nextZone]?.days || 2) * DAY_MS;
+                if (c.bidirectional) {
+                  p.nextDirection = dir === "frontToBack" ? "backToFront" : "frontToBack";
+                }
+              }
+
+              updatedCard = { ...c, progress: p };
+              return updatedCard;
+            }),
+          };
+        }),
+      }));
+    }
+
+    if (
+      !session.drillOnly &&
+      !session.listenOnly &&
+      session.mode === "sprint" &&
+      updatedCard &&
+      (quality === "bad" || !isCardMastered(updatedCard))
+    ) {
+      nextQueue.push({ deckId: deck.id, cardId: card.id, forcedDir: null });
+    }
+
+    setSession({
+      ...session,
+      queue: nextQueue,
+      missedItems: nextMissed,
+      finished: nextQueue.length === 0,
+    });
+    setFlipped(false);
+    setShowHint(false);
+    setHintUsed(false);
+    setEditingCard(false);
+    setSpokenText("");
+    setSpeechStatus("");
+  }
 
   function openCardEditor() {
     if (!currentItem) return;
@@ -393,107 +575,10 @@ export default function App() {
     setTab("import");
   }
 
-  function startSession(deckIds) {
-    const chosenDecks = data.decks.filter((d) => deckIds.includes(d.id));
-    const useSprint = chosenDecks.some((d) => d.mode === "sprint");
-    const queue = [];
-
-    chosenDecks.forEach((deck) => {
-      deck.cards.forEach((card) => {
-        if (onlyMinimalPairs && !card.isMinimalPair) return;
-        if (isCardDue(card, deck.mode)) {
-          queue.push({ deckId: deck.id, cardId: card.id });
-        }
-      });
-    });
-
-    setSession({
-      deckIds,
-      mode: useSprint ? "sprint" : "longTerm",
-      queue,
-    });
-    setFlipped(false);
-    setShowHint(false);
-    setHintUsed(false);
-    setEditingCard(false);
-    setSpokenText("");
-    setSpeechStatus("");
-    setTab("study");
-  }
-
-  function rateCard(quality) {
-    if (!currentItem || !session) return;
-    const { deck, card } = currentItem;
-    const dir = card.bidirectional
-      ? card.progress.nextDirection || "frontToBack"
-      : "frontToBack";
-
-    const nextQueue = session.queue.slice(1);
-    let updatedCard = null;
-
-    setData((prev) => ({
-      ...prev,
-      decks: prev.decks.map((d) => {
-        if (d.id !== deck.id) return d;
-        return {
-          ...d,
-          cards: d.cards.map((c) => {
-            if (c.id !== card.id) return c;
-            const p = {
-              ...c.progress,
-              frontToBack: { ...c.progress.frontToBack },
-              backToFront: { ...c.progress.backToFront },
-            };
-            const sideState = p[dir];
-
-            if (quality === "bad") {
-              sideState.zone = 0;
-              sideState.validated = false;
-              sideState.nextReview = Date.now();
-            } else if (quality === "mid") {
-              const currentZone = sideState.zone ?? 0;
-              sideState.zone = currentZone;
-              sideState.nextReview =
-                Date.now() + (ZONE_CONFIG[currentZone]?.days || 0) * DAY_MS;
-            } else if (quality === "easy") {
-              const nextZone = Math.min(MAX_ZONE, (sideState.zone ?? 0) + 1);
-              sideState.zone = nextZone;
-              sideState.validated = true;
-              sideState.nextReview =
-                Date.now() + (ZONE_CONFIG[nextZone]?.days || 2) * DAY_MS;
-              if (c.bidirectional) {
-                p.nextDirection = dir === "frontToBack" ? "backToFront" : "frontToBack";
-              }
-            }
-
-            updatedCard = { ...c, progress: p };
-            return updatedCard;
-          }),
-        };
-      }),
-    }));
-
-    if (
-      session.mode === "sprint" &&
-      updatedCard &&
-      (quality === "bad" || !isCardMastered(updatedCard))
-    ) {
-      nextQueue.push({ deckId: deck.id, cardId: card.id });
-    }
-
-    setSession({ ...session, queue: nextQueue });
-    setFlipped(false);
-    setShowHint(false);
-    setHintUsed(false);
-    setEditingCard(false);
-    setSpokenText("");
-    setSpeechStatus("");
-  }
-
   function handleSpeechTest(lang) {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
-      setSpeechStatus("Reconnaissance vocale non disponible ici (utilise Chrome en HTTPS).");
+      setSpeechStatus("Reconnaissance vocale indisponible ici (utilise Chrome en HTTPS).");
       return;
     }
     const rec = new SpeechRec();
@@ -514,6 +599,124 @@ export default function App() {
     rec.start();
   }
 
+  // --- MODE JEU RAPIDE ---
+  function startQuickGame(deckIds, subMode = gameSubMode) {
+    const chosenDecks = data.decks.filter((d) => deckIds.includes(d.id));
+    const pool = [];
+
+    chosenDecks.forEach((deck) => {
+      deck.cards.forEach((card) => {
+        if (subMode === "pronunciation" && !card.isLanguage) return;
+        pool.push({ deckId: deck.id, cardId: card.id });
+      });
+    });
+
+    const queue = shuffleArray(pool);
+    setGame({
+      subMode,
+      deckIds,
+      score: 0,
+      streak: 0,
+      solvedCount: 0,
+      skippedCount: 0,
+      queue,
+      missedCards: [],
+      finished: queue.length === 0,
+    });
+    setGameFeedback("");
+    setGameSpoken("");
+    setGameListening(false);
+    setGameShowAnswer(false);
+    setTab("game");
+  }
+
+  const activeGameCard = useMemo(() => {
+    if (!game || !game.queue.length) return null;
+    const head = game.queue[0];
+    const deck = data.decks.find((d) => d.id === head.deckId);
+    const card = deck?.cards.find((c) => c.id === head.cardId);
+    if (!deck || !card) return null;
+    return { deck, card };
+  }, [game, data.decks]);
+
+  function advanceGame({ success, penaltyPoints = 3, message = "" }) {
+    if (!game || !activeGameCard) return;
+    const nextQueue = game.queue.slice(1);
+    const nextScore = success
+      ? game.score + 10
+      : Math.max(0, game.score - penaltyPoints);
+
+    setGame({
+      ...game,
+      score: nextScore,
+      streak: success ? game.streak + 1 : 0,
+      solvedCount: success ? game.solvedCount + 1 : game.solvedCount,
+      skippedCount: success ? game.skippedCount : game.skippedCount + 1,
+      missedCards: success
+        ? game.missedCards
+        : [...game.missedCards, { deckId: activeGameCard.deck.id, cardId: activeGameCard.card.id }],
+      queue: nextQueue,
+      finished: nextQueue.length === 0,
+    });
+    setGameFeedback(message);
+    setGameSpoken("");
+    setGameShowAnswer(false);
+  }
+
+  function handleGameListenAndCheck() {
+    if (!activeGameCard) return;
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setGameFeedback("Micro non disponible ici (utilise Chrome en HTTPS).");
+      return;
+    }
+
+    const expectedText = activeGameCard.card.front.text;
+    const targetSpeechLang = activeGameCard.card.front.lang || "vi-VN";
+    const rec = new SpeechRec();
+    rec.lang = targetSpeechLang;
+    rec.interimResults = false;
+    rec.maxAlternatives = 3;
+
+    setGameListening(true);
+    setGameFeedback("Parle maintenant dans la langue cible...");
+    setGameSpoken("");
+
+    rec.onresult = (event) => {
+      setGameListening(false);
+      const alternatives = [];
+      for (let i = 0; i < event.results[0].length; i += 1) {
+        alternatives.push(event.results[0][i].transcript || "");
+      }
+      const bestTranscript = alternatives[0] || "";
+      setGameSpoken(bestTranscript);
+
+      const expectedNorm = normalizeText(expectedText, strictAccents);
+      const matched = alternatives.some(
+        (alt) => normalizeText(alt, strictAccents) === expectedNorm
+      );
+
+      if (matched) {
+        advanceGame({
+          success: true,
+          message: `+10 pts ! Prononciation validée : « ${expectedText} »`,
+        });
+      } else {
+        setGameFeedback(
+          `Entendu « ${bestTranscript} » — attendu « ${expectedText} ». Réessaie ou clique sur Passer (-3 pts).`
+        );
+      }
+    };
+
+    rec.onerror = (err) => {
+      setGameListening(false);
+      setGameFeedback("Erreur micro : " + (err.error || "vérifie les permissions"));
+    };
+
+    rec.start();
+  }
+
+  // --- PROMPT & IMPORT ---
   function buildPromptText() {
     const targetDeckObj =
       targetDeckId !== "__NEW__" ? data.decks.find((d) => d.id === targetDeckId) : null;
@@ -540,7 +743,7 @@ export default function App() {
     }
 
     lines.push(
-      "Règle pour 'hint' : rédige un VRAI indice (catégorie, contexte d'usage, nuance ou première lettre) qui aide à réfléchir SANS jamais dévoiler la réponse ni la traduction."
+      "Règle pour 'hint' : rédige un VRAI indice (catégorie, contexte d'usage, nuance ou piste) qui aide à réfléchir SANS jamais dévoiler la réponse ni la traduction."
     );
 
     if (isLanguageMode) {
@@ -565,8 +768,8 @@ export default function App() {
 \`\`\`json
 [
   {
-    "front": "question ou terme recto",
-    "back": "réponse ou définition verso",
+    "front": "question ou terme recto (langue cible)",
+    "back": "réponse ou traduction verso (français)",
     "toneHint": ${isLanguageMode && includeToneHint ? '"repère de ton / prononciation"' : '""'},
     "hint": "indice non spoilant",
     "example": "exemple court ou application",
@@ -592,7 +795,7 @@ export default function App() {
           : "Prompt JSON copié dans le presse-papier."
       );
     } catch {
-      setPromptFeedback("Copie auto bloquée : utilise le bloc ci-dessous pour copier le prompt.");
+      setPromptFeedback("Copie auto bloquée : sélectionne le bloc ci-dessous pour copier le prompt.");
     }
   }
 
@@ -679,7 +882,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "memobox-ai-v1.1-backup.json";
+    a.download = "memobox-ai-v3-backup.json";
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -748,7 +951,7 @@ export default function App() {
         }
 
         .mb-container {
-          max-width: 840px;
+          max-width: 860px;
           margin: 0 auto;
         }
 
@@ -779,6 +982,7 @@ export default function App() {
 
         .mb-nav {
           display: flex;
+          flex-wrap: wrap;
           gap: 6px;
           background: var(--paper-warm);
           padding: 5px;
@@ -791,8 +995,8 @@ export default function App() {
           background: transparent;
           color: var(--ink-muted);
           font-weight: 600;
-          font-size: 0.9rem;
-          padding: 8px 14px;
+          font-size: 0.88rem;
+          padding: 8px 13px;
           border-radius: 8px;
           cursor: pointer;
           transition: all 0.16s ease;
@@ -916,7 +1120,6 @@ export default function App() {
           font-size: 0.84rem;
         }
 
-        /* Retournement 3D sans débordement du verso */
         .mb-flip-scene {
           perspective: 1200px;
           margin: 14px 0 18px;
@@ -1059,8 +1262,8 @@ export default function App() {
       <div className="mb-container">
         <header className="mb-header">
           <div className="mb-brand">
-            <h1>MemoBox AI</h1>
-            <p>Zones de mémoire, cartes recto-verso et enrichissement progressif</p>
+            <h1>MemoBox AI · v3</h1>
+            <p>Zones de mémoire, écoute face A, séries rejouables et jeux rapides</p>
           </div>
 
           <nav className="mb-nav" aria-label="Navigation principale">
@@ -1075,6 +1278,12 @@ export default function App() {
               onClick={() => setTab("study")}
             >
               Réviser
+            </button>
+            <button
+              className={tab === "game" ? "is-active" : ""}
+              onClick={() => setTab("game")}
+            >
+              Jeu rapide
             </button>
             <button
               className={tab === "import" ? "is-active" : ""}
@@ -1097,34 +1306,55 @@ export default function App() {
                   alignItems: "center",
                 }}
               >
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <button
                     className="mb-btn mb-btn-primary"
                     onClick={() => {
                       const ids = data.decks.filter((d) => d.selected).map((d) => d.id);
-                      startSession(ids.length ? ids : data.decks.map((d) => d.id));
+                      startSession(ids.length ? ids : data.decks.map((d) => d.id), {
+                        listenOnly: listenOnlyMode,
+                        drillOnly: false,
+                      });
                     }}
                   >
-                    Réviser la sélection
+                    Réviser (mélangé)
                   </button>
 
-                  <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={onlyMinimalPairs}
-                      onChange={(e) => setOnlyMinimalPairs(e.target.checked)}
-                    />{" "}
-                    Tons / Paires minimales
-                  </label>
+                  <button
+                    className="mb-btn"
+                    onClick={() => {
+                      const ids = data.decks.filter((d) => d.selected).map((d) => d.id);
+                      startSession(ids.length ? ids : data.decks.map((d) => d.id), {
+                        listenOnly: true,
+                        drillOnly: true,
+                      });
+                    }}
+                  >
+                    Mode Écoute (Face A)
+                  </button>
 
-                  <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={listenMode}
-                      onChange={(e) => setListenMode(e.target.checked)}
-                    />{" "}
-                    Mode écoute (A → B)
-                  </label>
+                  <button
+                    className="mb-btn"
+                    onClick={() => {
+                      const ids = data.decks.filter((d) => d.selected).map((d) => d.id);
+                      startSession(ids.length ? ids : data.decks.map((d) => d.id), {
+                        listenOnly: false,
+                        drillOnly: true,
+                      });
+                    }}
+                  >
+                    Drill libre (rejouer)
+                  </button>
+
+                  <button
+                    className="mb-btn mb-btn-accent"
+                    onClick={() => {
+                      const ids = data.decks.filter((d) => d.selected).map((d) => d.id);
+                      startQuickGame(ids.length ? ids : data.decks.map((d) => d.id), gameSubMode);
+                    }}
+                  >
+                    Jeu rapide
+                  </button>
                 </div>
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1141,6 +1371,47 @@ export default function App() {
                     />
                   </label>
                 </div>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 14,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  marginTop: 12,
+                }}
+              >
+                <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={onlyMinimalPairs}
+                    onChange={(e) => setOnlyMinimalPairs(e.target.checked)}
+                  />{" "}
+                  Tons / Paires minimales
+                </label>
+
+                <label style={{ fontSize: "0.88rem", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={listenOnlyMode}
+                    onChange={(e) => setListenOnlyMode(e.target.checked)}
+                  />{" "}
+                  Forcer Mode Écoute sur Face A (sans réponse)
+                </label>
+
+                <label style={{ fontSize: "0.88rem" }}>
+                  Vitesse voix :{" "}
+                  <select
+                    style={{ width: "auto", padding: "5px 8px" }}
+                    value={speechRate}
+                    onChange={(e) => setSpeechRate(Number(e.target.value))}
+                  >
+                    <option value={0.75}>0.75x (lent)</option>
+                    <option value={1}>1.0x (normal)</option>
+                    <option value={1.2}>1.2x (rapide)</option>
+                  </select>
+                </label>
               </div>
 
               <div className="mb-zones-legend">
@@ -1259,7 +1530,15 @@ export default function App() {
                       <button className="mb-btn mb-btn-danger" onClick={() => deleteDeck(deck.id)}>
                         Supprimer
                       </button>
-                      <button className="mb-btn mb-btn-primary" onClick={() => startSession([deck.id])}>
+                      <button
+                        className="mb-btn mb-btn-primary"
+                        onClick={() =>
+                          startSession([deck.id], {
+                            listenOnly: listenOnlyMode,
+                            drillOnly: false,
+                          })
+                        }
+                      >
                         Réviser ce lot
                       </button>
                     </div>
@@ -1272,17 +1551,40 @@ export default function App() {
 
         {tab === "study" && (
           <section>
-            {!currentItem ? (
+            {!session || session.finished || !currentItem ? (
               <div className="mb-panel">
                 <h2 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
-                  Session terminée ou non démarrée
+                  {session?.finished ? "Série terminée !" : "Aucune session active"}
                 </h2>
                 <p style={{ color: "var(--ink-muted)" }}>
-                  Aucune carte en attente dans cette file. Choisis un lot pour lancer une session.
+                  {session?.finished
+                    ? "Tu peux rejouer cette série mélangée, ne cibler que les cartes manquées, ou lancer un jeu rapide."
+                    : "Choisis un lot dans l'onglet Lots pour lancer une révision mélangée."}
                 </p>
-                <button className="mb-btn mb-btn-primary" onClick={() => setTab("decks")}>
-                  Retour aux lots
-                </button>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                  {session && (
+                    <>
+                      <button
+                        className="mb-btn mb-btn-primary"
+                        onClick={() => replayCurrentSeries(false)}
+                      >
+                        Refaire toute la série (mélangée)
+                      </button>
+                      {(session.missedItems?.length || 0) > 0 && (
+                        <button
+                          className="mb-btn mb-btn-accent"
+                          onClick={() => replayCurrentSeries(true)}
+                        >
+                          Revoir les erreurs ({session.missedItems.length})
+                        </button>
+                      )}
+                    </>
+                  )}
+                  <button className="mb-btn" onClick={() => setTab("decks")}>
+                    Retour aux lots
+                  </button>
+                </div>
               </div>
             ) : (
               <div>
@@ -1298,12 +1600,17 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <span className="mb-pill">Zone {currentZoneNum}</span>
                     <span className="mb-pill">
-                      {activeDir === "frontToBack" ? "A → B (Recto → Verso)" : "B → A (Verso → Recto)"}
+                      {session.listenOnly
+                        ? "Écoute Face A (sans triche)"
+                        : activeDir === "frontToBack"
+                        ? "A → B"
+                        : "B → A"}
                     </span>
+                    <span className="mb-pill">Mélangé</span>
                     <span className="mb-pill">Restantes : {session.queue.length}</span>
                   </div>
 
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button
                       className="mb-btn"
                       onClick={() => (editingCard ? setEditingCard(false) : openCardEditor())}
@@ -1419,7 +1726,7 @@ export default function App() {
 
                     <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                       <button type="submit" className="mb-btn mb-btn-primary">
-                        Enregistrer les modifications
+                        Enregistrer
                       </button>
                       <button
                         type="button"
@@ -1432,208 +1739,433 @@ export default function App() {
                   </form>
                 )}
 
-                <div className="mb-flip-scene">
-                  <div className={`mb-flip-card ${flipped ? "is-flipped" : ""}`}>
-                    {/* RECTO */}
-                    <div className="mb-face">
-                      <div>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            flexWrap: "wrap",
-                            gap: 8,
-                            alignItems: "center",
-                          }}
+                {session.listenOnly ? (
+                  <div className="mb-panel" style={{ marginTop: 14 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: 8,
+                        alignItems: "center",
+                      }}
+                    >
+                      <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                        {currentItem.deck.title} · Entraînement d'oreille (Face A)
+                      </small>
+                      {askIsLanguage && (
+                        <button
+                          className="mb-btn mb-btn-accent"
+                          onClick={() => speakText(askSide.text, askSide.lang, speechRate)}
                         >
-                          <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
-                            {currentItem.deck.title}
-                          </small>
+                          Réécouter ({askSide.lang})
+                        </button>
+                      )}
+                    </div>
 
-                          {askIsLanguage && (
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                              <button
-                                className="mb-btn"
-                                onClick={() => speakText(askSide.text, askSide.lang)}
-                              >
-                                Écouter ({askSide.lang})
-                              </button>
-                              <button
-                                className="mb-btn"
-                                onClick={() => handleSpeechTest(askSide.lang)}
-                              >
-                                Tester voix
-                              </button>
-                              <label style={{ fontSize: "0.82rem", cursor: "pointer" }}>
-                                <input
-                                  type="checkbox"
-                                  checked={strictAccents}
-                                  onChange={(e) => setStrictAccents(e.target.checked)}
-                                />{" "}
-                                Strict
-                              </label>
-                            </div>
-                          )}
-                        </div>
+                    <p style={{ margin: "18px 0", color: "var(--ink-muted)", fontSize: "1rem" }}>
+                      Écoute attentivement et devine le sens avant de passer à la carte suivante (la réponse reste masquée pour travailler l'écoute).
+                    </p>
 
-                        <div className="mb-word">
-                          {listenMode &&
-                          askIsLanguage &&
-                          activeDir === "frontToBack" &&
-                          !flipped ? (
-                            <span style={{ fontSize: "1.2rem", fontStyle: "italic", color: "var(--ink-muted)" }}>
-                              Mode écoute actif (A → B) — clique sur « Écouter » ou retourne la carte.
-                            </span>
-                          ) : (
-                            askSide.text
-                          )}
-                        </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        className="mb-btn mb-btn-primary"
+                        onClick={() => rateCard("easy")}
+                      >
+                        Compris (suivante)
+                      </button>
+                      <button
+                        className="mb-btn mb-rate-bad"
+                        onClick={() => rateCard("bad")}
+                      >
+                        Pas compris (à rejouer)
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mb-flip-scene">
+                    <div className={`mb-flip-card ${flipped ? "is-flipped" : ""}`}>
+                      {/* RECTO */}
+                      <div className="mb-face">
+                        <div>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              flexWrap: "wrap",
+                              gap: 8,
+                              alignItems: "center",
+                            }}
+                          >
+                            <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                              {currentItem.deck.title}
+                            </small>
 
-                        {speechStatus && askIsLanguage && (
-                          <div className="mb-note-box">
-                            <strong>{speechStatus}</strong>
-                            {spokenText && (
-                              <div style={{ marginTop: 4 }}>
-                                Entendu : <code>{spokenText}</code> · Attendu :{" "}
-                                <code>{askSide.text}</code> ·{" "}
-                                <strong>
-                                  {speechMatches ? "Correspondance OK" : "À vérifier"}
-                                </strong>
+                            {askIsLanguage && (
+                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                                <button
+                                  className="mb-btn"
+                                  onClick={() => speakText(askSide.text, askSide.lang, speechRate)}
+                                >
+                                  Écouter ({askSide.lang})
+                                </button>
+                                <button
+                                  className="mb-btn"
+                                  onClick={() => handleSpeechTest(askSide.lang)}
+                                >
+                                  Tester voix
+                                </button>
+                                <label style={{ fontSize: "0.82rem", cursor: "pointer" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={strictAccents}
+                                    onChange={(e) => setStrictAccents(e.target.checked)}
+                                  />{" "}
+                                  Strict
+                                </label>
                               </div>
                             )}
                           </div>
-                        )}
 
-                        {showHint && (
-                          <div className="mb-note-box">
-                            <div>
-                              <strong>Indice :</strong>{" "}
-                              {currentItem.card.hint ||
-                                "Aucun indice enregistré pour cette carte."}
+                          <div className="mb-word">{askSide.text}</div>
+
+                          {speechStatus && askIsLanguage && (
+                            <div className="mb-note-box">
+                              <strong>{speechStatus}</strong>
+                              {spokenText && (
+                                <div style={{ marginTop: 4 }}>
+                                  Entendu : <code>{spokenText}</code> · Attendu :{" "}
+                                  <code>{askSide.text}</code> ·{" "}
+                                  <strong>
+                                    {speechMatches ? "Correspondance OK" : "À vérifier"}
+                                  </strong>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
-                      </div>
+                          )}
 
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          flexWrap: "wrap",
-                          gap: 10,
-                          marginTop: 14,
-                        }}
-                      >
-                        <button
-                          className="mb-btn"
-                          onClick={() => {
-                            setShowHint((v) => !v);
-                            setHintUsed(true);
-                          }}
-                        >
-                          {showHint ? "Masquer l'indice" : "Afficher l'indice"}
-                        </button>
-
-                        <button
-                          className="mb-btn mb-btn-primary"
-                          onClick={() => setFlipped(true)}
-                        >
-                          Retourner la carte
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* VERSO */}
-                    <div className="mb-face mb-face-back">
-                      <div>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            flexWrap: "wrap",
-                            alignItems: "center",
-                            gap: 8,
-                          }}
-                        >
-                          <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
-                            Réponse · Zone {currentZoneNum} →{" "}
-                            {hintUsed
-                              ? `Zone ${currentZoneNum} (avec indice)`
-                              : `Zone ${Math.min(MAX_ZONE, currentZoneNum + 1)} si Facile`}
-                          </small>
-
-                          {ansIsLanguage && (
-                            <button
-                              className="mb-btn"
-                              onClick={() => speakText(ansSide.text, ansSide.lang)}
-                            >
-                              Écouter réponse
-                            </button>
+                          {showHint && (
+                            <div className="mb-note-box">
+                              <div>
+                                <strong>Indice :</strong>{" "}
+                                {currentItem.card.hint ||
+                                  "Aucun indice enregistré pour cette carte."}
+                              </div>
+                            </div>
                           )}
                         </div>
 
-                        <div className="mb-answer-word" style={{ marginTop: 12 }}>
-                          {ansSide.text}
-                        </div>
-
-                        {currentItem.card.toneHint && (
-                          <div className="mb-note-box">
-                            <strong>Ton / Prononciation :</strong> {currentItem.card.toneHint}
-                          </div>
-                        )}
-
-                        {currentItem.card.example && (
-                          <p style={{ margin: "10px 0 0", color: "var(--ink-muted)", fontSize: "0.92rem" }}>
-                            <strong>Exemple :</strong> {currentItem.card.example}
-                          </p>
-                        )}
-                      </div>
-
-                      <div style={{ marginTop: 16 }}>
                         <div
                           style={{
                             display: "flex",
                             justifyContent: "space-between",
                             flexWrap: "wrap",
-                            alignItems: "center",
-                            gap: 8,
-                            marginBottom: 8,
+                            gap: 10,
+                            marginTop: 14,
                           }}
                         >
-                          <small style={{ color: "var(--ink-muted)" }}>
-                            {hintUsed
-                              ? "Indice consulté : « Facile » est désactivé pour ce tour."
-                              : "Évalue ton rappel pour mettre à jour la zone :"}
-                          </small>
-                          <button className="mb-btn" onClick={() => setFlipped(false)}>
-                            Voir le recto
+                          <button
+                            className="mb-btn"
+                            onClick={() => {
+                              setShowHint((v) => !v);
+                              setHintUsed(true);
+                            }}
+                          >
+                            {showHint ? "Masquer l'indice" : "Afficher l'indice"}
+                          </button>
+
+                          <button
+                            className="mb-btn mb-btn-primary"
+                            onClick={() => setFlipped(true)}
+                          >
+                            Retourner la carte
                           </button>
                         </div>
+                      </div>
 
-                        <div className="mb-rate-grid">
-                          <button
-                            className="mb-btn mb-rate-bad"
-                            onClick={() => rateCard("bad")}
+                      {/* VERSO */}
+                      <div className="mb-face mb-face-back">
+                        <div>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              gap: 8,
+                            }}
                           >
-                            Ne sais pas (→ Zone 0)
-                          </button>
-                          <button
-                            className="mb-btn mb-rate-mid"
-                            onClick={() => rateCard("mid")}
+                            <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                              Réponse · Zone {currentZoneNum} →{" "}
+                              {hintUsed
+                                ? `Zone ${currentZoneNum} (avec indice)`
+                                : `Zone ${Math.min(MAX_ZONE, currentZoneNum + 1)} si Facile`}
+                            </small>
+
+                            {ansIsLanguage && (
+                              <button
+                                className="mb-btn"
+                                onClick={() => speakText(ansSide.text, ansSide.lang, speechRate)}
+                              >
+                                Écouter réponse
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="mb-answer-word" style={{ marginTop: 12 }}>
+                            {ansSide.text}
+                          </div>
+
+                          {currentItem.card.toneHint && (
+                            <div className="mb-note-box">
+                              <strong>Ton / Prononciation :</strong> {currentItem.card.toneHint}
+                            </div>
+                          )}
+
+                          {currentItem.card.example && (
+                            <p style={{ margin: "10px 0 0", color: "var(--ink-muted)", fontSize: "0.92rem" }}>
+                              <strong>Exemple :</strong> {currentItem.card.example}
+                            </p>
+                          )}
+                        </div>
+
+                        <div style={{ marginTop: 16 }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 8,
+                            }}
                           >
-                            Avec indice (Reste Zone {currentZoneNum})
-                          </button>
-                          <button
-                            className="mb-btn mb-rate-easy"
-                            disabled={hintUsed}
-                            onClick={() => rateCard("easy")}
-                          >
-                            Facile (→ Zone {Math.min(MAX_ZONE, currentZoneNum + 1)})
-                          </button>
+                            <small style={{ color: "var(--ink-muted)" }}>
+                              {hintUsed
+                                ? "Indice consulté : « Facile » est désactivé pour ce tour."
+                                : "Évalue ton rappel pour mettre à jour la zone :"}
+                            </small>
+                            <button className="mb-btn" onClick={() => setFlipped(false)}>
+                              Voir le recto
+                            </button>
+                          </div>
+
+                          <div className="mb-rate-grid">
+                            <button
+                              className="mb-btn mb-rate-bad"
+                              onClick={() => rateCard("bad")}
+                            >
+                              Ne sais pas (→ Zone 0)
+                            </button>
+                            <button
+                              className="mb-btn mb-rate-mid"
+                              onClick={() => rateCard("mid")}
+                            >
+                              Avec indice (Reste Zone {currentZoneNum})
+                            </button>
+                            <button
+                              className="mb-btn mb-rate-easy"
+                              disabled={hintUsed}
+                              onClick={() => rateCard("easy")}
+                            >
+                              Facile (→ Zone {Math.min(MAX_ZONE, currentZoneNum + 1)})
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {tab === "game" && (
+          <section className="mb-panel">
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <h2 style={{ fontFamily: "'Fraunces', serif", margin: 0 }}>Jeu rapide</h2>
+                <p style={{ margin: "4px 0 0", color: "var(--ink-muted)", fontSize: "0.9rem" }}>
+                  Cartes mélangées · +10 pts par réussite · -3 pts si tu passes
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  style={{ width: "auto", padding: "7px 10px" }}
+                  value={gameSubMode}
+                  onChange={(e) => setGameSubMode(e.target.value)}
+                >
+                  <option value="pronunciation">Mode Prononciation (FR → Langue cible)</option>
+                  <option value="reflex">Mode Réflexe (validation rapide)</option>
+                </select>
+
+                <button
+                  className="mb-btn mb-btn-accent"
+                  onClick={() => {
+                    const ids = data.decks.filter((d) => d.selected).map((d) => d.id);
+                    startQuickGame(ids.length ? ids : data.decks.map((d) => d.id), gameSubMode);
+                  }}
+                >
+                  Lancer une manche
+                </button>
+              </div>
+            </div>
+
+            {!game ? (
+              <div className="mb-note-box" style={{ marginTop: 16 }}>
+                <strong>Règle du mode Prononciation :</strong> le mot s'affiche en français (langue maternelle) ; tu dois le prononcer à voix haute dans la langue d'apprentissage pour valider (+10 pts). Le bouton <strong>Passer / Je ne sais pas</strong> retire <strong>3 points</strong>.
+              </div>
+            ) : game.finished || !activeGameCard ? (
+              <div className="mb-note-box" style={{ marginTop: 16, borderLeftColor: "var(--ok)" }}>
+                <h3 style={{ fontFamily: "'Fraunces', serif", marginTop: 0 }}>
+                  Fin de manche — Score : {game.score} pts
+                </h3>
+                <p style={{ margin: "4px 0 12px" }}>
+                  Validées : <strong>{game.solvedCount}</strong> · Passées (-3 pts) :{" "}
+                  <strong>{game.skippedCount}</strong>
+                </p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    className="mb-btn mb-btn-primary"
+                    onClick={() => startQuickGame(game.deckIds, game.subMode)}
+                  >
+                    Rejouer la manche
+                  </button>
+                  {game.missedCards.length > 0 && (
+                    <button
+                      className="mb-btn"
+                      onClick={() => {
+                        const q = shuffleArray(game.missedCards);
+                        setGame({
+                          ...game,
+                          queue: q,
+                          missedCards: [],
+                          finished: false,
+                        });
+                        setGameFeedback("");
+                        setGameSpoken("");
+                      }}
+                    >
+                      Rejouer les passées ({game.missedCards.length})
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 18 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span className="mb-pill">Score : {game.score} pts</span>
+                    <span className="mb-pill">Série : {game.streak}</span>
+                    <span className="mb-pill">Restantes : {game.queue.length}</span>
+                  </div>
+
+                  <label style={{ fontSize: "0.85rem", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={strictAccents}
+                      onChange={(e) => setStrictAccents(e.target.checked)}
+                    />{" "}
+                    Strict (tons/accents)
+                  </label>
+                </div>
+
+                <div className="mb-note-box" style={{ padding: 20, marginTop: 12 }}>
+                  <small style={{ color: "var(--ink-muted)", fontWeight: 600 }}>
+                    {game.subMode === "pronunciation"
+                      ? `À prononcer en ${activeGameCard.card.front.lang || "langue cible"} :`
+                      : "Rappel rapide :"}
+                  </small>
+                  <div className="mb-word">
+                    {game.subMode === "pronunciation"
+                      ? activeGameCard.card.back.text
+                      : activeGameCard.card.front.text}
+                  </div>
+
+                  {gameShowAnswer && (
+                    <div className="mb-note-box" style={{ borderLeftColor: "var(--ok)" }}>
+                      <strong>Cible :</strong> {activeGameCard.card.front.text} —{" "}
+                      <strong>Sens :</strong> {activeGameCard.card.back.text}
+                      {activeGameCard.card.toneHint && (
+                        <div>
+                          <strong>Ton :</strong> {activeGameCard.card.toneHint}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {gameFeedback && (
+                  <p style={{ fontWeight: 600, color: "var(--accent)", marginTop: 10 }}>
+                    {gameFeedback}
+                  </p>
+                )}
+                {gameSpoken && (
+                  <p style={{ fontSize: "0.88rem", color: "var(--ink-muted)", margin: "4px 0 0" }}>
+                    Dernière écoute : <code>{gameSpoken}</code>
+                  </p>
+                )}
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                  {game.subMode === "pronunciation" ? (
+                    <button
+                      className="mb-btn mb-btn-primary"
+                      disabled={gameListening}
+                      onClick={handleGameListenAndCheck}
+                    >
+                      {gameListening ? "Écoute en cours..." : "Prononcer (+10 pts)"}
+                    </button>
+                  ) : (
+                    <button
+                      className="mb-btn mb-rate-easy"
+                      onClick={() =>
+                        advanceGame({
+                          success: true,
+                          message: `+10 pts ! ${activeGameCard.card.front.text} → ${activeGameCard.card.back.text}`,
+                        })
+                      }
+                    >
+                      Validé (+10 pts)
+                    </button>
+                  )}
+
+                  <button
+                    className="mb-btn mb-rate-bad"
+                    onClick={() =>
+                      advanceGame({
+                        success: false,
+                        penaltyPoints: 3,
+                        message: `-3 pts · Réponse : ${activeGameCard.card.front.text} (${activeGameCard.card.back.text})`,
+                      })
+                    }
+                  >
+                    Passer / Je ne sais pas (-3 pts)
+                  </button>
+
+                  <button
+                    className="mb-btn"
+                    onClick={() => setGameShowAnswer((v) => !v)}
+                  >
+                    {gameShowAnswer ? "Masquer la solution" : "Voir la solution"}
+                  </button>
                 </div>
               </div>
             )}
@@ -1781,10 +2313,7 @@ export default function App() {
                 Générer et copier le prompt JSON
               </button>
               {generatedPrompt && (
-                <button
-                  className="mb-btn"
-                  onClick={() => setGeneratedPrompt("")}
-                >
+                <button className="mb-btn" onClick={() => setGeneratedPrompt("")}>
                   Masquer le prompt
                 </button>
               )}
@@ -1855,7 +2384,23 @@ export default function App() {
                 onClick={handleConfirmImport}
               >
                 {selectedTargetDeck
-                  ? `Ajouter au lot « ${selectedTargetDeck.title} »` : "Créer le lot"} </button> </div>  {importError && ( <p style={{ color: "var(--bad)", fontWeight: 600, marginTop: 10 }}> {importError} </p> )}  {previewCards && ( <div className="mb-note-box" style={{ borderLeftColor: "var(--ok)" }}> <strong>{previewCards.length} carte(s) prête(s)</strong> · Destination :{" "} <strong> {selectedTargetDeck ? `Lot « ${selectedTargetDeck.title} »`
+                  ? `Ajouter au lot « ${selectedTargetDeck.title} »`
+                  : "Créer le lot"}
+              </button>
+            </div>
+
+            {importError && (
+              <p style={{ color: "var(--bad)", fontWeight: 600, marginTop: 10 }}>
+                {importError}
+              </p>
+            )}
+
+            {previewCards && (
+              <div className="mb-note-box" style={{ borderLeftColor: "var(--ok)" }}>
+                <strong>{previewCards.length} carte(s) prête(s)</strong> · Destination :{" "}
+                <strong>
+                  {selectedTargetDeck
+                    ? `Lot « ${selectedTargetDeck.title} »`
                     : "Nouveau lot"}
                 </strong>{" "}
                 · Exemple : <em>{previewCards[0].front.text}</em> →{" "}
